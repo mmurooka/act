@@ -69,7 +69,7 @@ def get_args_parser():
 
 def build_ACT_model_and_optimizer(args_override):
     parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
-    args = parser.parse_args()
+    args, unknown_args = parser.parse_known_args()
 
     for k, v in args_override.items():
         setattr(args, k, v)
