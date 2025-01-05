@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import torchvision.transforms as transforms
@@ -28,7 +29,12 @@ class ACTPolicy(nn.Module):
             total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
             loss_dict = dict()
             all_l1 = F.l1_loss(actions, a_hat, reduction='none')
-            l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
+            # l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
+            num_all_l1 = (~is_pad).sum().item() * actions.shape[-1]
+            if num_all_l1 == 0:
+                l1 = torch.tensor(0.0, device=all_l1.device)
+            else:
+                l1 = (all_l1 * ~is_pad.unsqueeze(-1)).sum() / num_all_l1
             loss_dict['l1'] = l1
             loss_dict['kl'] = total_kld[0]
             loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.kl_weight
