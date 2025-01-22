@@ -71,7 +71,7 @@ class DETRVAE(nn.Module):
             # input_dim = self.STATE_DIM + 7 # robot_state + env_state
             self.input_proj_robot_state = nn.Linear(self.STATE_DIM, hidden_dim)
             self.input_proj_env_state = nn.Linear(7, hidden_dim)
-            self.pos = torch.nn.Embedding(2, hidden_dim)
+            self.pos = torch.nn.Embedding(1, hidden_dim)
             self.backbones = None
 
         # encoder extra parameters
@@ -142,8 +142,9 @@ class DETRVAE(nn.Module):
             hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)[0]
         else:
             qpos = self.input_proj_robot_state(qpos)
-            env_state = self.input_proj_env_state(env_state)
-            transformer_input = torch.cat([qpos, env_state], axis=1) # seq length = 2
+            # env_state = self.input_proj_env_state(env_state)
+            # transformer_input = torch.stack([qpos, env_state], axis=1) # seq length = 2
+            transformer_input = qpos[:, None, :]
             hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
         a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)
@@ -238,12 +239,14 @@ def build_encoder(args):
 
 
 def build(args):
-    # From state
-    # backbone = None # from state for now, no need for conv nets
-    # From image
-    backbones = []
-    backbone = build_backbone(args)
-    backbones.append(backbone)
+    if args.backbone is None:
+        # From state
+        backbones = None # from state for now, no need for conv nets
+    else:
+        # From image
+        backbones = []
+        backbone = build_backbone(args)
+        backbones.append(backbone)
 
     transformer = build_transformer(args)
 
