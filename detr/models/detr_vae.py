@@ -36,6 +36,7 @@ class DETRVAE(nn.Module):
 
     STATE_DIM = 7
     ACTION_DIM = 7
+    TACTILE_DIM = None
 
     @classmethod
     def set_state_dim(cls, state_dim):
@@ -45,7 +46,11 @@ class DETRVAE(nn.Module):
     def set_action_dim(cls, action_dim):
         cls.ACTION_DIM = action_dim
 
-    def __init__(self, backbones, transformer, encoder, num_queries, camera_names):
+    @classmethod
+    def set_tactile_dim(cls, tactile_dim):
+        cls.TACTILE_DIM = tactile_dim
+
+    def __init__(self, backbones, transformer, encoder, num_queries, camera_names, use_tactile=False):
         """ Initializes the model.
         Parameters:
             backbones: torch module of the backbone to be used. See backbone.py
@@ -57,6 +62,12 @@ class DETRVAE(nn.Module):
         super().__init__()
         self.num_queries = num_queries
         self.camera_names = camera_names
+        self.use_tactile = use_tactile
+        if self.use_tactile:
+            self.tactile_embed_dim = 1
+        else:
+            self.tactile_embed_dim = 0
+
         self.transformer = transformer
         self.encoder = encoder
         hidden_dim = transformer.d_model
@@ -67,11 +78,14 @@ class DETRVAE(nn.Module):
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
             self.backbones = nn.ModuleList(backbones)
             self.input_proj_robot_state = nn.Linear(self.STATE_DIM, hidden_dim)
+            if self.use_tactile:
+                self.tactile_input_proj_robot_state = nn.Linear(self.TACTILE_DIM, hidden_dim)
         else:
             # input_dim = self.STATE_DIM + 7 # robot_state + env_state
             self.input_proj_robot_state = nn.Linear(self.STATE_DIM, hidden_dim)
-            self.input_proj_env_state = nn.Linear(7, hidden_dim)
-            self.pos = torch.nn.Embedding(1, hidden_dim)
+            if self.use_tactile:
+                self.tactile_input_proj_robot_state = nn.Linear(self.TACTILE_DIM, hidden_dim)
+            self.pos = torch.nn.Embedding(1+self.tactile_embed_dim, hidden_dim)
             self.backbones = None
 
         # encoder extra parameters
@@ -79,14 +93,16 @@ class DETRVAE(nn.Module):
         self.cls_embed = nn.Embedding(1, hidden_dim) # extra cls token embedding
         self.encoder_action_proj = nn.Linear(self.ACTION_DIM, hidden_dim) # project action to embedding
         self.encoder_joint_proj = nn.Linear(self.STATE_DIM, hidden_dim)  # project qpos to embedding
+        if self.use_tactile:
+            self.tactile_proj = nn.Linear(self.TACTILE_DIM, hidden_dim)  # project tactile to embedding
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
-        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
+        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+self.tactile_embed_dim+num_queries, hidden_dim)) # [CLS], qpos, tactile, a_seq
 
         # decoder extra parameters
         self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
-        self.additional_pos_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
+        self.additional_pos_embed = nn.Embedding(2+self.tactile_embed_dim, hidden_dim) # learned position embedding for proprio and latent
 
-    def forward(self, qpos, image, env_state, actions=None, is_pad=None):
+    def forward(self, qpos, image, env_state, actions=None, is_pad=None, tactile=None):
         """
         qpos: batch, qpos_dim
         image: batch, num_cam, channel, height, width
@@ -95,22 +111,30 @@ class DETRVAE(nn.Module):
         """
         is_training = actions is not None # train or val
         bs, _ = qpos.shape
+        if not self.use_tactile:
+            assert tactile is None, "[DETRVAE] Do not input tactile when use_tactile is False."
         ### Obtain latent z from action sequence
         if is_training:
             # project action sequence to embedding dim, and concat with a CLS token
             action_embed = self.encoder_action_proj(actions) # (bs, seq, hidden_dim)
             qpos_embed = self.encoder_joint_proj(qpos)  # (bs, hidden_dim)
             qpos_embed = torch.unsqueeze(qpos_embed, axis=1)  # (bs, 1, hidden_dim)
+            if self.use_tactile:
+                tactile_embed = self.tactile_proj(tactile)  # (bs, hidden_dim)
+                tactile_embed = torch.unsqueeze(tactile_embed, axis=1)  # (bs, 1, hidden_dim)
             cls_embed = self.cls_embed.weight # (1, hidden_dim)
             cls_embed = torch.unsqueeze(cls_embed, axis=0).repeat(bs, 1, 1) # (bs, 1, hidden_dim)
-            encoder_input = torch.cat([cls_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
-            encoder_input = encoder_input.permute(1, 0, 2) # (seq+1, bs, hidden_dim)
+            if self.use_tactile:
+                encoder_input = torch.cat([cls_embed, qpos_embed, tactile_embed, action_embed], axis=1) # (bs, seq+3, hidden_dim)
+            else:
+                encoder_input = torch.cat([cls_embed, qpos_embed, action_embed], axis=1) # (bs, seq+2, hidden_dim)
+            encoder_input = encoder_input.permute(1, 0, 2) # (seq+2or3, bs, hidden_dim)
             # do not mask cls token
-            cls_joint_is_pad = torch.full((bs, 2), False).to(qpos.device) # False: not a padding
-            is_pad = torch.cat([cls_joint_is_pad, is_pad], axis=1)  # (bs, seq+1)
+            cls_joint_is_pad = torch.full((bs, 2+self.tactile_embed_dim), False).to(qpos.device) # False: not a padding
+            is_pad = torch.cat([cls_joint_is_pad, is_pad], axis=1)  # (bs, seq+2or3)
             # obtain position embedding
             pos_embed = self.pos_table.clone().detach()
-            pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
+            pos_embed = pos_embed.permute(1, 0, 2)  # (seq+2or3, 1, hidden_dim)
             # query model
             encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
             encoder_output = encoder_output[0] # take cls output only
@@ -136,15 +160,21 @@ class DETRVAE(nn.Module):
                 all_cam_pos.append(pos)
             # proprioception features
             proprio_input = self.input_proj_robot_state(qpos)
+            if self.use_tactile:
+                tactile_input = self.tactile_input_proj_robot_state(tactile)
+            else:
+                tactile_input = None
             # fold camera dimension into width dimension
             src = torch.cat(all_cam_features, axis=3)
             pos = torch.cat(all_cam_pos, axis=3)
-            hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)[0]
+            hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, tactile_input, self.additional_pos_embed.weight)[0]
         else:
             qpos = self.input_proj_robot_state(qpos)
-            # env_state = self.input_proj_env_state(env_state)
-            # transformer_input = torch.stack([qpos, env_state], axis=1) # seq length = 2
-            transformer_input = qpos[:, None, :]
+            if self.use_tactile:
+                tactile = self.tactile_input_proj_robot_state(tactile)
+                transformer_input = torch.stack([qpos, tactile], axis=1) # seq length = 2
+            else:
+                transformer_input = qpos[:, None, :]
             hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
         a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)
@@ -258,6 +288,7 @@ def build(args):
         encoder,
         num_queries=args.num_queries,
         camera_names=args.camera_names,
+        use_tactile=args.use_tactile,
     )
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
