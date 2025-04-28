@@ -2,6 +2,8 @@
 """
 DETR model and criterion classes.
 """
+import os
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -72,12 +74,14 @@ class DETRVAE(nn.Module):
 
         self.TACTILE_FEATURE_DIM = 1 # 1 for mujoco, 2 for real
         self.TACTILE_NUM_NODES = self.TACTILE_DIM // self.TACTILE_FEATURE_DIM
-        self.TACTILE_EDGE_IDX = torch.tensor([
-            [0, 1, 2, 3, 4, 5, 6, 7, 8],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        ], dtype=torch.long) # TODO
+        tactile_data_path = os.path.abspath(os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "../../../../humanoid_tactile_il/tactile_data/tactile_neighbor_graph_mujoco.npz"))
+        tactile_data = np.load(tactile_data_path)
+        self.TACTILE_EDGE_IDX = torch.tensor(tactile_data["edge_index"], dtype=torch.long)
         print("Use GCN for tactile:")
         print(f"  - #feature: {self.TACTILE_FEATURE_DIM}, #nodes: {self.TACTILE_NUM_NODES}, #edges: {self.TACTILE_EDGE_IDX.shape[1]}")
+        print(f"  - TACTILE_EDGE_IDX is loaded from {tactile_data_path}")
 
         self.transformer = transformer
         self.encoder = encoder
