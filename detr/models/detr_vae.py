@@ -98,9 +98,9 @@ class DETRVAE(nn.Module):
                     in_features=self.TACTILE_FEATURE_DIM, out_features=16, num_nodes=self.TACTILE_NUM_NODES, edge_index=self.TACTILE_EDGE_IDX)
                 self.tactile_gcn_input2 = SimpleGCNLayer(
                     in_features=16, out_features=32, num_nodes=self.TACTILE_NUM_NODES, edge_index=self.TACTILE_EDGE_IDX)
-                self.tactile_gcn_input3 = SimpleGCNLayer(
-                    in_features=32, out_features=64, num_nodes=self.TACTILE_NUM_NODES, edge_index=self.TACTILE_EDGE_IDX)
-                self.tactile_input_proj_robot_state = nn.Linear(64 * self.TACTILE_NUM_NODES, hidden_dim)
+                # self.tactile_gcn_input3 = SimpleGCNLayer(
+                #     in_features=32, out_features=64, num_nodes=self.TACTILE_NUM_NODES, edge_index=self.TACTILE_EDGE_IDX)
+                self.tactile_input_proj_robot_state = nn.Linear(32 * self.TACTILE_NUM_NODES, hidden_dim)
         else:
             # input_dim = self.STATE_DIM + 7 # robot_state + env_state
             self.input_proj_robot_state = nn.Linear(self.STATE_DIM, hidden_dim)
@@ -119,9 +119,9 @@ class DETRVAE(nn.Module):
                 in_features=self.TACTILE_FEATURE_DIM, out_features=16, num_nodes=self.TACTILE_NUM_NODES, edge_index=self.TACTILE_EDGE_IDX)
             self.tactile_gcn_embed2 = SimpleGCNLayer(
                 in_features=16, out_features=32, num_nodes=self.TACTILE_NUM_NODES, edge_index=self.TACTILE_EDGE_IDX)
-            self.tactile_gcn_embed3 = SimpleGCNLayer(
-                in_features=32, out_features=64, num_nodes=self.TACTILE_NUM_NODES, edge_index=self.TACTILE_EDGE_IDX)
-            self.tactile_proj = nn.Linear(64 * self.TACTILE_NUM_NODES, hidden_dim)  # project tactile to embedding
+            # self.tactile_gcn_embed3 = SimpleGCNLayer(
+            #     in_features=32, out_features=64, num_nodes=self.TACTILE_NUM_NODES, edge_index=self.TACTILE_EDGE_IDX)
+            self.tactile_proj = nn.Linear(32 * self.TACTILE_NUM_NODES, hidden_dim)  # project tactile to embedding
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
         self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+self.tactile_embed_dim+num_queries, hidden_dim)) # [CLS], qpos, tactile, a_seq
 
@@ -150,7 +150,7 @@ class DETRVAE(nn.Module):
                 tactile_embed = tactile.reshape((bs, self.TACTILE_FEATURE_DIM, -1)).transpose(1, 2)
                 tactile_embed = F.relu(self.tactile_gcn_embed1(tactile_embed))
                 tactile_embed = F.relu(self.tactile_gcn_embed2(tactile_embed))
-                tactile_embed = F.relu(self.tactile_gcn_embed3(tactile_embed))
+                # tactile_embed = F.relu(self.tactile_gcn_embed3(tactile_embed))
                 tactile_embed = tactile_embed.flatten(start_dim=1)
                 tactile_embed = self.tactile_proj(tactile_embed)  # (bs, hidden_dim)
                 tactile_embed = torch.unsqueeze(tactile_embed, axis=1)  # (bs, 1, hidden_dim)
@@ -196,7 +196,7 @@ class DETRVAE(nn.Module):
                 tactile_input = tactile.reshape((bs, self.TACTILE_FEATURE_DIM, -1)).transpose(1, 2)
                 tactile_input = F.relu(self.tactile_gcn_input1(tactile_input))
                 tactile_input = F.relu(self.tactile_gcn_input2(tactile_input))
-                tactile_input = F.relu(self.tactile_gcn_input3(tactile_input))
+                # tactile_input = F.relu(self.tactile_gcn_input3(tactile_input))
                 tactile_input = tactile_input.flatten(start_dim=1)
                 tactile_input = self.tactile_input_proj_robot_state(tactile_input) # (bs, hidden_dim)
             else:
